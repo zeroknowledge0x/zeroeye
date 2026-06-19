@@ -646,7 +646,14 @@ class MigrationEngine:
             return False
 
     def _create_backup(self) -> bool:
-        """Create a backup of the data before migration."""
+        """Create a backup of the data before migration.
+
+        Returns True on success, False on any filesystem failure.
+        Specific OSError subclasses (FileNotFoundError, PermissionError,
+        OSError) are caught separately so the user sees a clear message
+        about what went wrong (missing parent dir, no write permission,
+        disk full, etc.) instead of a raw traceback.
+        """
         backup_dir = Path(self.config.backup_dir or DEFAULT_CONFIG["backup_dir"])
         backup_path = backup_dir / f"migration_{self.config.migration_id}"
 
@@ -670,25 +677,67 @@ class MigrationEngine:
                 "script_version": SCRIPT_VERSION,
                 "files": [],
             }
-            with open(backup_path / "manifest.json", "w") as f:
+            manifest_path = backup_path / "manifest.json"
+            with open(manifest_path, "w") as f:
                 json.dump(manifest, f, indent=2)
 
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to create backup: {e}")
+        except FileNotFoundError as e:
+            logger.error(
+                f"Backup failed: parent directory does not exist for "
+                f"{backup_path} ({e}). Create the parent directory or "
+                f"set --backup-dir to a writable path."
+            )
+            return False
+        except PermissionError as e:
+            logger.error(
+                f"Backup failed: insufficient permissions to write to "
+                f"{backup_path} ({e}). Check that the user has write "
+                f"access to the backup directory."
+            )
+            return False
+        except OSError as e:
+            logger.error(
+                f"Backup failed: OS error creating backup at {backup_path} "
+                f"({type(e).__name__}: {e}). Verify disk space and "
+                f"filesystem health."
+            )
             return False
 
     def _restore_from_backup(self, backup_path: Path) -> bool:
-        """Restore data from a backup."""
+        """Restore data from a backup.
+
+        Returns True on success, False on any filesystem or parsing
+        failure. Checks for missing backup directory and manifest
+        before attempting to read, with informative messages so the
+        operator knows whether the path is wrong, the backup is
+        corrupt, or the manifest is unreadable.
+        """
         logger.info(f"Restoring from backup at {backup_path}")
 
-        # Verify backup manifest
-        manifest_path = backup_path / "manifest.json"
-        if not manifest_path.exists():
-            logger.error("Backup manifest not found")
+        # Verify backup directory and manifest exist and are readable.
+        if backup_path is None:
+            logger.error(
+                "Restore failed: no backup path provided. "
+                "Specify --backup-dir or set migration_config.backup_dir."
+            )
+            return False
+        if not backup_path.exists():
+            logger.error(
+                f"Restore failed: backup directory does not exist at "
+                f"{backup_path}. Verify the backup_dir config and that "
+                f"a backup was created for this migration_id."
+            )
+            return False
+        if not backup_path.is_dir():
+            logger.error(
+                f"Restore failed: backup path is not a directory "
+                f"({backup_path}). Cannot restore from a file."
+            )
             return False
 
+        manifest_path = backup_path / "manifest.json"
         try:
             with open(manifest_path) as f:
                 manifest = json.load(f)
@@ -704,8 +753,30 @@ class MigrationEngine:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Restore failed: {e}")
+        except FileNotFoundError:
+            logger.error(
+                f"Restore failed: backup manifest not found at "
+                f"{manifest_path}. Backup may be corrupt or incomplete."
+            )
+            return False
+        except PermissionError as e:
+            logger.error(
+                f"Restore failed: insufficient permissions to read "
+                f"{manifest_path} ({e}). Check file ownership and "
+                f"read permissions on the backup directory."
+            )
+            return False
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"Restore failed: backup manifest at {manifest_path} "
+                f"is malformed JSON ({e}). Backup may be corrupt."
+            )
+            return False
+        except OSError as e:
+            logger.error(
+                f"Restore failed: OS error reading backup at {backup_path} "
+                f"({type(e).__name__}: {e}). Verify disk health."
+            )
             return False
 
     def _save_state(self) -> None:
@@ -1116,6 +1187,10 @@ def main():
             print("  Warnings:")
             for w in result.warnings:
                 print(f"    - {w}")
+        # Graceful exit code: non-zero on failure, zero on success.
+        if result.status.value in ("failed", "rolled_back"):
+            logger.error(f"Migration ended in status {result.status.value}; exiting with code 1.")
+            return 1
 
     elif args.command == "validate":
         print(f"Validating data in {args.data_dir}...")
@@ -1135,6 +1210,11 @@ def main():
         engine = MigrationEngine(config)
         result = engine.rollback()
         print(f"Rollback result: {result.status.value}")
+        # Graceful exit code: non-zero if rollback failed (e.g. missing
+        # backup directory or unreadable manifest).
+        if result.status.value == "failed":
+            logger.error(f"Rollback failed; exiting with code 1.")
+            return 1
 
     elif args.command == "status":
         print("Checking migration status...")
