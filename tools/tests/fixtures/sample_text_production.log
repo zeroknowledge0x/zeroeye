@@ -1,0 +1,10 @@
+2024-01-15 10:23:45 INFO [auth_service] User u_a1b2c3d4 logged in from 203.0.113.42
+2024-01-15 10:23:47 ERROR [payment_service] Payment failed for order ord_5f8a9b: card_declined
+2024-01-15 10:23:50 WARN [auth_service] Rate limit reached for user u_e5f6g7h8 (95/100 requests in 60s)
+2024-01-15 10:24:01 DEBUG [inventory_service] Cache miss for product prod_q1w2e3 (took 234ms)
+2024-01-15 10:24:15 INFO [notification_service] Email sent to h_8a9b0c1d (template: order_confirmation)
+2024-01-15 10:24:30 FATAL [auth_service] Database connection pool exhausted: 20/20 active, 47 queued
+2024-01-15 10:24:45 INFO [analytics_service] Event page_view tracked for session sess_hij234klm
+2024-01-15 10:25:02 ERROR [payment_service] Gateway stripe timeout (30000ms) for order ord_r9s0t1u2
+2024-01-15 10:25:18 INFO [auth_service] Token refreshed for user u_v3w4x5y6 (age: 3540s)
+2024-01-15 10:25:33 WARN [inventory_service] Low stock alert: product prod_z7a8b9c0 has 3 units (threshold: 10)

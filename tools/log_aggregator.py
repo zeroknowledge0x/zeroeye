@@ -114,16 +114,80 @@ class LogParser:
 
 
 class JSONLogParser(LogParser):
-    """Parses structured JSON log lines."""
+    """Parses structured JSON log lines.
+
+    Timestamps are normalized to integer epoch seconds to keep the
+    aggregator's time-range math consistent across parser outputs
+    (TextLogParser/NginxLogParser both return int epochs). String
+    timestamps that don't match any known format are preserved as-is
+    so the original value stays available in entry['fields'].
+    """
+
+    _TS_FORMATS = [
+        '%Y-%m-%dT%H:%M:%S.%fZ',
+        '%Y-%m-%dT%H:%M:%S.%f%z',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%d %H:%M:%S.%f',
+        '%Y-%m-%d %H:%M:%S',
+    ]
+
+    @classmethod
+    def _normalize_timestamp(cls, value: Any) -> Optional[int]:
+        """Convert JSON timestamp value to int epoch seconds.
+
+        Accepts: int/float epoch, ISO-8601 strings with optional
+        fractional seconds and timezone. Returns None for values
+        that cannot be parsed.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            # Numeric string (epoch seconds) — accept.
+            try:
+                return int(float(s))
+            except ValueError:
+                pass
+            # ISO-style string — try known formats.
+            for fmt in cls._TS_FORMATS:
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return int(dt.timestamp())
+                except ValueError:
+                    continue
+            # Last resort: fromisoformat (Python 3.11+ handles most ISO).
+            try:
+                dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return int(dt.timestamp())
+            except (ValueError, TypeError):
+                pass
+        return None
 
     def parse(self, line: str) -> Optional[Dict[str, Any]]:
         try:
             entry = json.loads(line.strip())
             if not isinstance(entry, dict):
                 return None
+            raw_ts = entry.get('timestamp') or entry.get('time') or entry.get('@timestamp')
+            normalized_ts = self._normalize_timestamp(raw_ts)
             return {
-                'timestamp': entry.get('timestamp') or entry.get('time') or entry.get('@timestamp'),
-                'level': entry.get('level') or entry.get('severity') or entry.get('lvl', 'info'),
+                'timestamp': normalized_ts,
+                'level': self._normalize_level(
+                    entry.get('level') or entry.get('severity') or entry.get('lvl')
+                ),
                 'service': entry.get('service') or entry.get('logger') or entry.get('app'),
                 'message': entry.get('message') or entry.get('msg') or entry.get('event', ''),
                 'fields': entry,
@@ -131,6 +195,29 @@ class JSONLogParser(LogParser):
             }
         except json.JSONDecodeError:
             return None
+
+    @staticmethod
+    def _normalize_level(raw: Optional[str]) -> str:
+        """Normalize JSON level strings to the canonical error/warn/info buckets.
+
+        Maps FATAL/CRITICAL/EMERGENCY/ALERT -> error so error-rate metrics
+        count them, WARN/WARNING -> warn, DEBUG/TRACE -> debug, else info.
+        Returns 'unknown' if raw is None/empty.
+        """
+        if not raw:
+            return 'unknown'
+        l = str(raw).strip().lower()
+        if l in ('error', 'err'):
+            return 'error'
+        if l in ('fatal', 'critical', 'emergency', 'alert', 'panic'):
+            return 'error'
+        if l in ('warn', 'warning'):
+            return 'warn'
+        if l in ('debug', 'trace'):
+            return 'debug'
+        if l in ('info', 'information', 'notice'):
+            return 'info'
+        return l
 
 
 class TextLogParser(LogParser):
@@ -204,7 +291,10 @@ class NginxLogParser(LogParser):
 
 class LogAggregator:
     def __init__(self):
-        self.parsers = [JSONLogParser(), TextLogParser(), NginxLogParser()]
+        # Order matters: try specific formats (JSON, Nginx) before the
+        # permissive TextLogParser, otherwise TextLogParser matches nginx
+        # lines with service=None and NginxLogParser never runs.
+        self.parsers = [JSONLogParser(), NginxLogParser(), TextLogParser()]
         self.entries: List[Dict[str, Any]] = []
         self.level_counts: Counter = Counter()
         self.service_counts: Counter = Counter()

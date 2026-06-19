@@ -1,0 +1,17 @@
+{"timestamp": "2024-01-15T10:30:00.000Z", "level": "INFO", "service": "good", "message": "valid line"}
+
+{"timestamp": "2024-01-15T10:30:05.000Z", "level": "ERROR", "service": "auth-api", "message": "truncated json
+
+{"timestamp": "2024-01-15T10:30:10.000Z", "level": "INFO", "service": "test", "message": "missing brace"
+
+This is a malformed line that doesn't match any log format
+{"timestamp": "2024-01-15T10:30:15.000Z", "level": "INVALID_LEVEL"
+2024-01-15 10:30:20 INFO [binary-svc] line with binary garbage: <binary data> followed by more text
+2024-01-15 10:30:25 INFO [empty-msg] 
+{"timestamp": null, "level": null, "service": "null-fields", "message": null, "weird": true}
+{"timestamp": "not-a-date", "level": "INFO", "service": "bad-ts", "message": "invalid timestamp format"}
+{"timestamp": "2024-01-15T10:30:30.000Z", "level": "INFO", "service": "x" + "y" * 5000, "message": "extremely long service name"}
+192.0.2.1 - - [not-a-date] "BAD" abc "ref" "ua"
+203.0.113.99 - - [15/Jan/2024:10:30:35 +0000] "GET /test HTTP/1.1" not-a-number 1234 "-" "-"
+{"level": "INFO", "service": "no-ts", "message": "missing timestamp field entirely"}
+{"timestamp": "2024-01-15T10:30:40.000Z", "level": "INFO", "message": "missing service field"}
